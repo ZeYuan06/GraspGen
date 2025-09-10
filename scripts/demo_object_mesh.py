@@ -178,33 +178,41 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         pt_idx = sample_points(xyz, num_sample_points)
         xyz = xyz[pt_idx]
         obj = None
-        T_subtract_pc_mean = np.eye(4)  # No centering for point cloud
+        T_total_transform = np.eye(4)  # No transforms for point cloud
     else:
         obj = trimesh.load(mesh_file)
         obj.apply_scale(scale)
+        
+        # Record all transformations applied to the object
+        T_total_transform = np.eye(4)
         
         # Place object on scene if scene is provided
         if scene_mesh is not None:
             placement_transform = place_object_on_scene(obj, scene_mesh, placement_offset)
             if placement_transform is not None:
                 obj.apply_transform(placement_transform)
+                T_total_transform = placement_transform @ T_total_transform
                 print(f"Placed object on scene surface")
         
         # Center object in XY but keep Z placement
         obj_center = obj.bounds.mean(axis=0)
         T_subtract_xy_mean = tra.translation_matrix([-obj_center[0], -obj_center[1], 0])
         obj.apply_transform(T_subtract_xy_mean)
+        T_total_transform = T_subtract_xy_mean @ T_total_transform
         
-        # Sample points from placed object
+        # Sample points from placed and centered object
         xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
         xyz = np.array(xyz)
         
-        T_subtract_pc_mean = T_subtract_xy_mean
+        # Apply point cloud centering based on sampled points
+        T_subtract_pc_mean = tra.translation_matrix(-xyz.mean(axis=0))
+        xyz = tra.transform_points(xyz, T_subtract_pc_mean)
+        T_total_transform = T_subtract_pc_mean @ T_total_transform
 
     # Create dummy RGB values (white)
     rgb = np.ones((len(xyz), 3)) * 255
 
-    return xyz, rgb, obj, T_subtract_pc_mean
+    return xyz, rgb, obj, T_total_transform
 
 
 def load_scene_mesh(scene_mesh_file, scale=1.0):
@@ -219,25 +227,6 @@ def load_scene_mesh(scene_mesh_file, scale=1.0):
         # Handle different types of loaded objects
         if isinstance(loaded_object, trimesh.Scene):
             print(f"Loaded GLB scene with {len(loaded_object.geometry)} geometries")
-            
-            # # Combine all geometries in the scene into a single mesh
-            # meshes = []
-            # for name, geometry in loaded_object.geometry.items():
-            #     if isinstance(geometry, trimesh.Trimesh):
-            #         # Apply the transform from the scene graph
-            #         transform = loaded_object.graph.get(name)[0]
-            #         geometry_copy = geometry.copy()
-            #         geometry_copy.apply_transform(transform)
-            #         meshes.append(geometry_copy)
-            #         print(f"  - Added mesh '{name}' with {len(geometry.vertices)} vertices")
-            
-            # if meshes:
-            #     # Combine all meshes into a single mesh
-            #     scene_mesh = trimesh.util.concatenate(meshes)
-            #     print(f"Combined scene mesh has {len(scene_mesh.vertices)} vertices")
-            # else:
-            #     raise ValueError("No valid meshes found in the scene")
-
             scene_mesh = loaded_object.dump(concatenate=True)
             print(f"Successfully dumped scene mesh with {len(scene_mesh.vertices)} vertices")
                 
@@ -424,18 +413,29 @@ if __name__ == "__main__":
         if args.output_file != "":
             print(f"Saving predicted grasps to {args.output_file}")
             
-            # Save in Isaac format (YAML)
+            # Save in Isaac format (YAML) - absolute poses for Isaac compatibility
             save_to_isaac_grasp_format(
                 grasps_inferred, grasp_conf_inferred, args.output_file
             )
             
-            # Also save in ManiSkill format (NPZ) with .npz extension
+            # Save in ManiSkill format (NPZ) - relative poses for simulation flexibility
             maniskill_output_path = args.output_file.replace('.yml', '.npz').replace('.yaml', '.npz')
             if not maniskill_output_path.endswith('.npz'):
                 maniskill_output_path += '.npz'
             
+            # Calculate object pose for relative grasp conversion
+            if obj_mesh is not None:
+                # Get object's current pose in world coordinates
+                # T_subtract_pc_mean contains all transformations applied to the object
+                object_pose = np.linalg.inv(T_subtract_pc_mean)
+                print(f"Object pose calculated from total transform")
+            else:
+                # Default identity if no object mesh
+                object_pose = np.eye(4)
+                print(f"Using identity object pose")
+            
             save_to_maniskill_format(
-                grasps_inferred, grasp_conf_inferred, maniskill_output_path
+                grasps_inferred, grasp_conf_inferred, maniskill_output_path, object_pose
             )
         else:
             print("No output file specified, skipping grasp saving")

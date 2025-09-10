@@ -248,17 +248,21 @@ def save_to_isaac_grasp_format(
 
 
 def save_to_maniskill_format(
-    grasps: np.ndarray, confidences: np.ndarray, output_path: str
+    grasps: np.ndarray, 
+    confidences: np.ndarray, 
+    output_path: str,
+    object_pose: np.ndarray = None
 ):
-    """Saves grasps and confidences to NPZ format optimized for ManiSkill simulation libraries
+    """Saves grasps to NPZ format optimized for ManiSkill simulation libraries with relative poses.
     
-    This format provides efficient loading and direct access to pose matrices and quaternions,
-    which are commonly used in robotics simulation libraries like ManiSkill, PyBullet, etc.
+    This format stores grasp poses relative to the object for position-independent usage in simulation.
     
     Args:
-        grasps (np.array): Grasp poses, 4x4 homogeneous matrices
+        grasps (np.array): Grasp poses in world coordinates, 4x4 homogeneous matrices
         confidences (np.array): Confidences predicted by the network
         output_path (str): Path to the npz file to save
+        object_pose (np.array): Object's current pose in world coordinates (4x4 matrix)
+                               If None, assumes grasps are already relative to object
     """
     assert len(grasps) == len(confidences), "Number of grasps and confidences must match"
     
@@ -266,41 +270,62 @@ def save_to_maniskill_format(
         print("Warning: No grasps to save")
         return
     
-    # Extract positions and rotations for efficient access
-    positions = grasps[:, :3, 3]  # (N, 3) translation vectors
-    rotation_matrices = grasps[:, :3, :3]  # (N, 3, 3) rotation matrices
-    
-    # Convert rotation matrices to quaternions [x, y, z, w] format (commonly used in simulation)
-    quaternions = np.array([tra.quaternion_from_matrix(R) for R in rotation_matrices])
-    # Convert from [w, x, y, z] to [x, y, z, w] format for ManiSkill compatibility
-    quaternions = quaternions[:, [1, 2, 3, 0]]
-    
     # Sort by confidence (highest first) for easy access to best grasps
     sorted_indices = np.argsort(confidences)[::-1]
+    sorted_grasps = grasps[sorted_indices]
+    sorted_confidences = confidences[sorted_indices]
     
-    # Prepare data for efficient simulation use
+    # Convert to relative poses if object pose is provided
+    if object_pose is not None:
+        # Convert world grasps to relative grasps
+        object_pose_inv = np.linalg.inv(object_pose)
+        relative_grasps = np.array([object_pose_inv @ grasp for grasp in sorted_grasps])
+        print(f"Converted {len(grasps)} grasps to relative poses")
+    else:
+        # Assume grasps are already relative to object
+        relative_grasps = sorted_grasps
+        print(f"Using grasps as relative poses")
+    
+    # Extract relative positions and orientations
+    positions = relative_grasps[:, :3, 3]  # (N, 3) relative positions
+    rotation_matrices = relative_grasps[:, :3, :3]  # (N, 3, 3) relative rotations
+    
+    # Convert rotation matrices to quaternions [x, y, z, w] format for ManiSkill
+    quaternions = []
+    euler_angles = []
+    for grasp in relative_grasps:
+        q = tra.quaternion_from_matrix(grasp)
+        quaternions.append([q[1], q[2], q[3], q[0]])  # [x,y,z,w] format
+        euler_angles.append(tra.euler_from_matrix(grasp, 'rxyz'))
+    
+    quaternions = np.array(quaternions, dtype=np.float32)
+    euler_angles = np.array(euler_angles, dtype=np.float32)
+    
+    # Save comprehensive data for ManiSkill
     save_data = {
-        # Core grasp data
-        'poses': grasps[sorted_indices].astype(np.float32),  # (N, 4, 4) transformation matrices
-        'positions': positions[sorted_indices].astype(np.float32),  # (N, 3) positions
-        'quaternions': quaternions[sorted_indices].astype(np.float32),  # (N, 4) [x,y,z,w] quaternions  
-        'confidences': confidences[sorted_indices].astype(np.float32),  # (N,) confidence scores
+        # Core grasp data (relative to object)
+        'relative_poses': relative_grasps.astype(np.float32),          # (N, 4, 4) relative to object
+        'relative_positions': positions.astype(np.float32),            # (N, 3) relative positions
+        'relative_quaternions': quaternions,                           # (N, 4) relative orientations [x,y,z,w]
+        'relative_euler_angles': euler_angles,                         # (N, 3) relative euler angles
+        'confidences': sorted_confidences.astype(np.float32),          # (N,) confidence scores
         
-        # Metadata for simulation setup
-        'num_grasps': len(grasps),
-        'best_grasp_idx': 0,  # Index of best grasp (always 0 after sorting)
-        'confidence_range': np.array([confidences.min(), confidences.max()], dtype=np.float32),
+        # Metadata
+        'num_grasps': len(sorted_grasps),
+        'best_grasp_idx': 0,
+        'confidence_range': np.array([sorted_confidences.min(), sorted_confidences.max()], dtype=np.float32),
+        'sorted_indices': sorted_indices.astype(np.int32),
         
-        # Convenience arrays for common simulation operations
-        'euler_angles': np.array([tra.euler_from_matrix(grasps[i]) for i in sorted_indices], dtype=np.float32),  # (N, 3) roll-pitch-yaw
-        'sorted_indices': sorted_indices.astype(np.int32),  # Original indices before sorting
+        # Object reference (if provided)
+        'object_pose': object_pose.astype(np.float32) if object_pose is not None else np.eye(4, dtype=np.float32),
+        'is_relative': True,  # Flag indicating poses are relative to object
     }
     
     # Save to compressed NPZ format for efficiency
     np.savez_compressed(output_path, **save_data)
     
-    print(f"Saved {len(grasps)} grasps to ManiSkill format: {output_path}")
-    print(f"Best grasp confidence: {confidences[sorted_indices[0]]:.4f}")
+    print(f"Saved {len(sorted_grasps)} relative grasps to ManiSkill format: {output_path}")
+    print(f"Best grasp confidence: {sorted_confidences[0]:.4f}")
     
     return save_data
 

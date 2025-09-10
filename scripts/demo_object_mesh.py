@@ -112,6 +112,35 @@ def parse_args():
     return parser.parse_args()
 
 
+def place_object_on_scene(obj_mesh, scene_mesh, placement_height_offset=0.01):
+    """Place object on top of the scene (e.g., on table surface)."""
+    if obj_mesh is None or scene_mesh is None:
+        return None
+    
+    # Get scene bounds
+    scene_bounds = scene_mesh.bounds
+    scene_min_z = scene_bounds[0][2]  # Bottom Z
+    scene_max_z = scene_bounds[1][2]  # Top Z (table surface)
+    
+    # Get object bounds
+    obj_bounds = obj_mesh.bounds
+    obj_min_z = obj_bounds[0][2]
+    obj_height = obj_bounds[1][2] - obj_bounds[0][2]
+    
+    # Calculate placement position
+    # Place object on table surface with small offset
+    target_z = scene_max_z + placement_height_offset
+    
+    # Move object so its bottom sits on the table
+    z_offset = target_z - obj_min_z
+    placement_transform = tra.translation_matrix([0, 0, z_offset])
+    
+    print(f"Scene Z range: {scene_min_z:.3f} to {scene_max_z:.3f}")
+    print(f"Object height: {obj_height:.3f}, placing at Z: {target_z:.3f}")
+    
+    return placement_transform
+
+
 def load_mesh_data(mesh_file, scale, num_sample_points):
     """Load mesh data and sample points from surface."""
     if mesh_file.endswith("ply"):
@@ -133,6 +162,44 @@ def load_mesh_data(mesh_file, scale, num_sample_points):
     xyz = tra.transform_points(xyz, T_subtract_pc_mean)
     if obj is not None:
         obj.apply_transform(T_subtract_pc_mean)
+
+    # Create dummy RGB values (white)
+    rgb = np.ones((len(xyz), 3)) * 255
+
+    return xyz, rgb, obj, T_subtract_pc_mean
+
+
+def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample_points, placement_offset=0.01):
+    """Load mesh data and place it appropriately relative to scene."""
+    if mesh_file.endswith("ply"):
+        import open3d as o3d
+        pcd = o3d.io.read_point_cloud(mesh_file)
+        xyz = np.array(pcd.points).astype(np.float32)
+        pt_idx = sample_points(xyz, num_sample_points)
+        xyz = xyz[pt_idx]
+        obj = None
+        T_subtract_pc_mean = np.eye(4)  # No centering for point cloud
+    else:
+        obj = trimesh.load(mesh_file)
+        obj.apply_scale(scale)
+        
+        # Place object on scene if scene is provided
+        if scene_mesh is not None:
+            placement_transform = place_object_on_scene(obj, scene_mesh, placement_offset)
+            if placement_transform is not None:
+                obj.apply_transform(placement_transform)
+                print(f"Placed object on scene surface")
+        
+        # Center object in XY but keep Z placement
+        obj_center = obj.bounds.mean(axis=0)
+        T_subtract_xy_mean = tra.translation_matrix([-obj_center[0], -obj_center[1], 0])
+        obj.apply_transform(T_subtract_xy_mean)
+        
+        # Sample points from placed object
+        xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
+        xyz = np.array(xyz)
+        
+        T_subtract_pc_mean = T_subtract_xy_mean
 
     # Create dummy RGB values (white)
     rgb = np.ones((len(xyz), 3)) * 255
@@ -262,7 +329,7 @@ if __name__ == "__main__":
     gripper_name = grasp_cfg.data.gripper_name
     grasp_sampler = GraspGenSampler(grasp_cfg)
 
-    # Load scene mesh if collision filtering is enabled
+    # Load scene mesh first if collision filtering is enabled
     scene_mesh = None
     gripper_mesh = None
     if args.filter_collisions:
@@ -276,15 +343,25 @@ if __name__ == "__main__":
             print("Warning: No gripper mesh available, collision filtering disabled")
             args.filter_collisions = False
 
-    # Load mesh data
+    # Load mesh data with scene-aware placement
     print(f"Processing mesh file: {args.mesh_file}")
-    pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data(
-        args.mesh_file, args.mesh_scale, args.num_sample_points
-    )
+    if args.filter_collisions and scene_mesh is not None:
+        # Use scene-aware placement
+        pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data_with_scene_placement(
+            args.mesh_file, scene_mesh, args.mesh_scale, args.num_sample_points
+        )
+    else:
+        # Use original centering method
+        pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data(
+            args.mesh_file, args.mesh_scale, args.num_sample_points
+        )
 
-    # Visualize original mesh
-    if not args.no_visualization and obj_mesh is not None:
-        visualize_mesh(vis, "object_mesh", obj_mesh, color=[169, 169, 169])
+    # Visualize meshes
+    if not args.no_visualization:
+        if obj_mesh is not None:
+            visualize_mesh(vis, "object_mesh", obj_mesh, color=[169, 169, 169])
+        if scene_mesh is not None:
+            visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3)
         visualize_pointcloud(vis, "pc", pc, pc_color, size=0.0025)
 
     # Run inference on point cloud
@@ -310,26 +387,19 @@ if __name__ == "__main__":
             [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
         )
         
-        # Apply collision filtering if enabled
+        # Apply collision filtering if enabled  
         if args.filter_collisions and scene_mesh is not None and gripper_mesh is not None:
-            # Transform scene mesh to same coordinate system as grasps
-            scene_mesh_transformed = scene_mesh.copy()
-            scene_mesh_transformed.apply_transform(tra.inverse_matrix(T_subtract_pc_mean))
-            
+            # No need to transform scene_mesh since object is already placed relative to scene
             valid_grasps, valid_conf, valid_mask = filter_collision_grasps(
                 grasps_original_frame, 
                 grasp_conf_inferred,
-                scene_mesh_transformed,
+                scene_mesh,  # Use original scene_mesh
                 gripper_mesh
             )
             
             # Update data for visualization and saving
             grasps_inferred = valid_grasps
             grasp_conf_inferred = valid_conf
-            
-            # Visualize scene mesh
-            if not args.no_visualization:
-                visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.5)
         else:
             grasps_inferred = grasps_original_frame
 

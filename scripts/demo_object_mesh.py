@@ -153,23 +153,26 @@ def load_scene_mesh(scene_mesh_file, scale=1.0):
         if isinstance(loaded_object, trimesh.Scene):
             print(f"Loaded GLB scene with {len(loaded_object.geometry)} geometries")
             
-            # Combine all geometries in the scene into a single mesh
-            meshes = []
-            for name, geometry in loaded_object.geometry.items():
-                if isinstance(geometry, trimesh.Trimesh):
-                    # Apply the transform from the scene graph
-                    transform = loaded_object.graph.get(name)[0]
-                    geometry_copy = geometry.copy()
-                    geometry_copy.apply_transform(transform)
-                    meshes.append(geometry_copy)
-                    print(f"  - Added mesh '{name}' with {len(geometry.vertices)} vertices")
+            # # Combine all geometries in the scene into a single mesh
+            # meshes = []
+            # for name, geometry in loaded_object.geometry.items():
+            #     if isinstance(geometry, trimesh.Trimesh):
+            #         # Apply the transform from the scene graph
+            #         transform = loaded_object.graph.get(name)[0]
+            #         geometry_copy = geometry.copy()
+            #         geometry_copy.apply_transform(transform)
+            #         meshes.append(geometry_copy)
+            #         print(f"  - Added mesh '{name}' with {len(geometry.vertices)} vertices")
             
-            if meshes:
-                # Combine all meshes into a single mesh
-                scene_mesh = trimesh.util.concatenate(meshes)
-                print(f"Combined scene mesh has {len(scene_mesh.vertices)} vertices")
-            else:
-                raise ValueError("No valid meshes found in the scene")
+            # if meshes:
+            #     # Combine all meshes into a single mesh
+            #     scene_mesh = trimesh.util.concatenate(meshes)
+            #     print(f"Combined scene mesh has {len(scene_mesh.vertices)} vertices")
+            # else:
+            #     raise ValueError("No valid meshes found in the scene")
+
+            scene_mesh = loaded_object.dump(concatenate=True)
+            print(f"Successfully dumped scene mesh with {len(scene_mesh.vertices)} vertices")
                 
         elif isinstance(loaded_object, trimesh.Trimesh):
             # Single mesh file

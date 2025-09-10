@@ -247,6 +247,64 @@ def save_to_isaac_grasp_format(
     return data
 
 
+def save_to_maniskill_format(
+    grasps: np.ndarray, confidences: np.ndarray, output_path: str
+):
+    """Saves grasps and confidences to NPZ format optimized for ManiSkill simulation libraries
+    
+    This format provides efficient loading and direct access to pose matrices and quaternions,
+    which are commonly used in robotics simulation libraries like ManiSkill, PyBullet, etc.
+    
+    Args:
+        grasps (np.array): Grasp poses, 4x4 homogeneous matrices
+        confidences (np.array): Confidences predicted by the network
+        output_path (str): Path to the npz file to save
+    """
+    assert len(grasps) == len(confidences), "Number of grasps and confidences must match"
+    
+    if len(grasps) == 0:
+        print("Warning: No grasps to save")
+        return
+    
+    # Extract positions and rotations for efficient access
+    positions = grasps[:, :3, 3]  # (N, 3) translation vectors
+    rotation_matrices = grasps[:, :3, :3]  # (N, 3, 3) rotation matrices
+    
+    # Convert rotation matrices to quaternions [x, y, z, w] format (commonly used in simulation)
+    quaternions = np.array([tra.quaternion_from_matrix(R) for R in rotation_matrices])
+    # Convert from [w, x, y, z] to [x, y, z, w] format for ManiSkill compatibility
+    quaternions = quaternions[:, [1, 2, 3, 0]]
+    
+    # Sort by confidence (highest first) for easy access to best grasps
+    sorted_indices = np.argsort(confidences)[::-1]
+    
+    # Prepare data for efficient simulation use
+    save_data = {
+        # Core grasp data
+        'poses': grasps[sorted_indices].astype(np.float32),  # (N, 4, 4) transformation matrices
+        'positions': positions[sorted_indices].astype(np.float32),  # (N, 3) positions
+        'quaternions': quaternions[sorted_indices].astype(np.float32),  # (N, 4) [x,y,z,w] quaternions  
+        'confidences': confidences[sorted_indices].astype(np.float32),  # (N,) confidence scores
+        
+        # Metadata for simulation setup
+        'num_grasps': len(grasps),
+        'best_grasp_idx': 0,  # Index of best grasp (always 0 after sorting)
+        'confidence_range': np.array([confidences.min(), confidences.max()], dtype=np.float32),
+        
+        # Convenience arrays for common simulation operations
+        'euler_angles': np.array([tra.euler_from_matrix(grasps[i]) for i in sorted_indices], dtype=np.float32),  # (N, 3) roll-pitch-yaw
+        'sorted_indices': sorted_indices.astype(np.int32),  # Original indices before sorting
+    }
+    
+    # Save to compressed NPZ format for efficiency
+    np.savez_compressed(output_path, **save_data)
+    
+    print(f"Saved {len(grasps)} grasps to ManiSkill format: {output_path}")
+    print(f"Best grasp confidence: {confidences[sorted_indices[0]]:.4f}")
+    
+    return save_data
+
+
 def load_from_isaac_grasp_format(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
     """Loads grasps and confidences from output file, which is written in the Isaac grasp format
 

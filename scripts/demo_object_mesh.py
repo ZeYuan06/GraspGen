@@ -26,7 +26,7 @@ from grasp_gen.utils.meshcat_utils import (
 )
 from grasp_gen.utils.point_cloud_utils import point_cloud_outlier_removal
 from grasp_gen.dataset.dataset_utils import sample_points
-from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format, check_collision
+from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format, save_to_maniskill_format, check_collision
 
 
 def parse_args():
@@ -423,8 +423,19 @@ if __name__ == "__main__":
         # Save grasps to file only if output_file is not empty
         if args.output_file != "":
             print(f"Saving predicted grasps to {args.output_file}")
+            
+            # Save in Isaac format (YAML)
             save_to_isaac_grasp_format(
                 grasps_inferred, grasp_conf_inferred, args.output_file
+            )
+            
+            # Also save in ManiSkill format (NPZ) with .npz extension
+            maniskill_output_path = args.output_file.replace('.yml', '.npz').replace('.yaml', '.npz')
+            if not maniskill_output_path.endswith('.npz'):
+                maniskill_output_path += '.npz'
+            
+            save_to_maniskill_format(
+                grasps_inferred, grasp_conf_inferred, maniskill_output_path
             )
         else:
             print("No output file specified, skipping grasp saving")

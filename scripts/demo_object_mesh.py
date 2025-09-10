@@ -26,7 +26,7 @@ from grasp_gen.utils.meshcat_utils import (
 )
 from grasp_gen.utils.point_cloud_utils import point_cloud_outlier_removal
 from grasp_gen.dataset.dataset_utils import sample_points
-from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format
+from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format, check_collision
 
 
 def parse_args():
@@ -91,6 +91,23 @@ def parse_args():
         action="store_true",
         help="Disable meshcat visualization",
     )
+    parser.add_argument(
+        "--scene_mesh_file",
+        type=str,
+        default="",
+        help="Path to the scene mesh file for collision checking (obj, stl, or ply)",
+    )
+    parser.add_argument(
+        "--gripper_mesh_file", 
+        type=str,
+        default="",
+        help="Path to the gripper mesh file for collision checking (obj, stl, or ply)",
+    )
+    parser.add_argument(
+        "--filter_collisions",
+        action="store_true",
+        help="Filter out grasps that collide with the scene",
+    )
 
     return parser.parse_args()
 
@@ -123,6 +140,64 @@ def load_mesh_data(mesh_file, scale, num_sample_points):
     return xyz, rgb, obj, T_subtract_pc_mean
 
 
+def load_scene_mesh(scene_mesh_file, scale=1.0):
+    """Load scene mesh for collision checking."""
+    if not os.path.exists(scene_mesh_file):
+        raise FileNotFoundError(f"Scene mesh file {scene_mesh_file} not found")
+    
+    scene_mesh = trimesh.load(scene_mesh_file)
+    scene_mesh.apply_scale(scale)
+    
+    print(f"Loaded scene mesh with {len(scene_mesh.vertices)} vertices")
+    return scene_mesh
+
+
+def load_gripper_mesh(gripper_mesh_file, gripper_name):
+    """Load gripper mesh for collision checking."""
+    if gripper_mesh_file and os.path.exists(gripper_mesh_file):
+        gripper_mesh = trimesh.load(gripper_mesh_file)
+        print(f"Loaded custom gripper mesh: {gripper_mesh_file}")
+    else:
+        # Use default gripper mesh paths
+        default_gripper_paths = {
+            "robotiq_2f_140": "assets/robotiq/robotiq_140_collision.obj",
+            "franka_panda": "assets/franka/franka_panda.urdf",
+            "suction": "assets/suction/suction_cup.obj"
+        }
+        
+        if gripper_name in default_gripper_paths:
+            gripper_path = default_gripper_paths[gripper_name]
+            if os.path.exists(gripper_path) and gripper_path.endswith(('.obj', '.stl', '.ply')):
+                gripper_mesh = trimesh.load(gripper_path)
+                print(f"Loaded default gripper mesh for {gripper_name}")
+            else:
+                print(f"Warning: Default gripper mesh not found for {gripper_name}")
+                gripper_mesh = None
+        else:
+            print(f"Warning: No gripper mesh available for {gripper_name}")
+            gripper_mesh = None
+    
+    return gripper_mesh
+
+
+def filter_collision_grasps(grasps, grasp_conf, scene_mesh, gripper_mesh):
+    """Filter out grasps that collide with the scene."""
+    print("Checking for collisions...")
+    
+    # Check collisions using the existing check_collision function
+    collisions = check_collision(scene_mesh, gripper_mesh, grasps)
+    
+    # Filter out colliding grasps
+    valid_mask = ~collisions  # Invert to keep non-colliding grasps
+    valid_grasps = grasps[valid_mask]
+    valid_conf = grasp_conf[valid_mask]
+    
+    print(f"Filtered {np.sum(collisions)} colliding grasps out of {len(grasps)}")
+    print(f"Remaining valid grasps: {len(valid_grasps)}")
+    
+    return valid_grasps, valid_conf, valid_mask
+
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -148,6 +223,20 @@ if __name__ == "__main__":
     gripper_name = grasp_cfg.data.gripper_name
     grasp_sampler = GraspGenSampler(grasp_cfg)
 
+    # Load scene mesh if collision filtering is enabled
+    scene_mesh = None
+    gripper_mesh = None
+    if args.filter_collisions:
+        if args.scene_mesh_file == "":
+            raise ValueError("scene_mesh_file is required when filter_collisions is True")
+        
+        scene_mesh = load_scene_mesh(args.scene_mesh_file, args.mesh_scale)
+        gripper_mesh = load_gripper_mesh(args.gripper_mesh_file, gripper_name)
+        
+        if gripper_mesh is None:
+            print("Warning: No gripper mesh available, collision filtering disabled")
+            args.filter_collisions = False
+
     # Load mesh data
     print(f"Processing mesh file: {args.mesh_file}")
     pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data(
@@ -172,9 +261,42 @@ if __name__ == "__main__":
     if len(grasps_inferred) > 0:
         grasp_conf_inferred = grasp_conf_inferred.cpu().numpy()
         grasps_inferred = grasps_inferred.cpu().numpy()
-        scores_inferred = get_color_from_score(grasp_conf_inferred, use_255_scale=True)
+        
         print(
             f"Inferred {len(grasps_inferred)} grasps, with scores ranging from {grasp_conf_inferred.min():.3f} - {grasp_conf_inferred.max():.3f}"
+        )
+
+        # Convert grasps back to original mesh frame BEFORE collision checking
+        grasps_original_frame = np.array(
+            [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
+        )
+        
+        # Apply collision filtering if enabled
+        if args.filter_collisions and scene_mesh is not None and gripper_mesh is not None:
+            # Transform scene mesh to same coordinate system as grasps
+            scene_mesh_transformed = scene_mesh.copy()
+            scene_mesh_transformed.apply_transform(tra.inverse_matrix(T_subtract_pc_mean))
+            
+            valid_grasps, valid_conf, valid_mask = filter_collision_grasps(
+                grasps_original_frame, 
+                grasp_conf_inferred,
+                scene_mesh_transformed,
+                gripper_mesh
+            )
+            
+            # Update data for visualization and saving
+            grasps_inferred = valid_grasps
+            grasp_conf_inferred = valid_conf
+            
+            # Visualize scene mesh
+            if not args.no_visualization:
+                visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3)
+        else:
+            grasps_inferred = grasps_original_frame
+
+        scores_inferred = get_color_from_score(grasp_conf_inferred, use_255_scale=True)
+        print(
+            f"Final {len(grasps_inferred)} grasps, with scores ranging from {grasp_conf_inferred.min():.3f} - {grasp_conf_inferred.max():.3f}"
         )
 
         # Visualize inferred grasps
@@ -188,11 +310,6 @@ if __name__ == "__main__":
                     gripper_name=gripper_name,
                     linewidth=0.6,
                 )
-
-        # Convert grasps back to original mesh frame
-        grasps_inferred = np.array(
-            [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
-        )
 
         # Save grasps to file only if output_file is not empty
         if args.output_file != "":

@@ -95,7 +95,7 @@ def parse_args():
         "--scene_mesh_file",
         type=str,
         default="",
-        help="Path to the scene mesh file for collision checking (obj, stl, or ply)",
+        help="Path to the scene mesh file for collision checking (obj, stl, ply, glb, or gltf)",
     )
     parser.add_argument(
         "--gripper_mesh_file", 
@@ -141,15 +141,51 @@ def load_mesh_data(mesh_file, scale, num_sample_points):
 
 
 def load_scene_mesh(scene_mesh_file, scale=1.0):
-    """Load scene mesh for collision checking."""
+    """Load scene mesh for collision checking, supports GLB files."""
     if not os.path.exists(scene_mesh_file):
         raise FileNotFoundError(f"Scene mesh file {scene_mesh_file} not found")
     
-    scene_mesh = trimesh.load(scene_mesh_file)
-    scene_mesh.apply_scale(scale)
-    
-    print(f"Loaded scene mesh with {len(scene_mesh.vertices)} vertices")
-    return scene_mesh
+    try:
+        # Load the mesh/scene file
+        loaded_object = trimesh.load(scene_mesh_file)
+        
+        # Handle different types of loaded objects
+        if isinstance(loaded_object, trimesh.Scene):
+            print(f"Loaded GLB scene with {len(loaded_object.geometry)} geometries")
+            
+            # Combine all geometries in the scene into a single mesh
+            meshes = []
+            for name, geometry in loaded_object.geometry.items():
+                if isinstance(geometry, trimesh.Trimesh):
+                    # Apply the transform from the scene graph
+                    transform = loaded_object.graph.get(name)[0]
+                    geometry_copy = geometry.copy()
+                    geometry_copy.apply_transform(transform)
+                    meshes.append(geometry_copy)
+                    print(f"  - Added mesh '{name}' with {len(geometry.vertices)} vertices")
+            
+            if meshes:
+                # Combine all meshes into a single mesh
+                scene_mesh = trimesh.util.concatenate(meshes)
+                print(f"Combined scene mesh has {len(scene_mesh.vertices)} vertices")
+            else:
+                raise ValueError("No valid meshes found in the scene")
+                
+        elif isinstance(loaded_object, trimesh.Trimesh):
+            # Single mesh file
+            scene_mesh = loaded_object
+            print(f"Loaded single mesh with {len(scene_mesh.vertices)} vertices")
+        else:
+            raise ValueError(f"Unsupported mesh type: {type(loaded_object)}")
+        
+        # Apply scaling
+        scene_mesh.apply_scale(scale)
+        
+        return scene_mesh
+        
+    except Exception as e:
+        print(f"Error loading scene mesh: {e}")
+        raise
 
 
 def load_gripper_mesh(gripper_mesh_file, gripper_name):

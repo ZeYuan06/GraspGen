@@ -178,7 +178,8 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         pt_idx = sample_points(xyz, num_sample_points)
         xyz = xyz[pt_idx]
         obj = None
-        T_total_transform = np.eye(4)  # No transforms for point cloud
+        T_scene_placement = np.eye(4)  # No transforms for point cloud
+        T_subtract_pc_mean = np.eye(4)
     else:
         obj = trimesh.load(mesh_file)
         obj.apply_scale(scale)
@@ -187,40 +188,38 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
         xyz = np.array(xyz)
         
-        # Record all transformations applied to the object
-        T_total_transform = np.eye(4)
+        # Record transformations separately
+        T_scene_placement = np.eye(4)  # Transform to place on scene
         
         # Place object on scene if scene is provided
         if scene_mesh is not None:
             placement_transform = place_object_on_scene(obj, scene_mesh, placement_offset)
             if placement_transform is not None:
                 obj.apply_transform(placement_transform)
-                # Apply the same transform to the point cloud
                 xyz = tra.transform_points(xyz, placement_transform)
-                T_total_transform = placement_transform @ T_total_transform
+                T_scene_placement = placement_transform @ T_scene_placement
                 print(f"Placed object on scene surface")
         
         # Center object in XY but keep Z placement
         obj_center = obj.bounds.mean(axis=0)
         T_subtract_xy_mean = tra.translation_matrix([-obj_center[0], -obj_center[1], 0])
         obj.apply_transform(T_subtract_xy_mean)
-        # Apply the same transform to the point cloud
         xyz = tra.transform_points(xyz, T_subtract_xy_mean)
-        T_total_transform = T_subtract_xy_mean @ T_total_transform
+        T_scene_placement = T_subtract_xy_mean @ T_scene_placement
         
-        # Apply final point cloud centering based on current point cloud position
+        # Apply final point cloud centering for inference (this is temporary)
         pc_center = xyz.mean(axis=0)
         T_subtract_pc_mean = tra.translation_matrix(-pc_center)
         xyz = tra.transform_points(xyz, T_subtract_pc_mean)
         # Also apply to object mesh to keep them synchronized
         if obj is not None:
             obj.apply_transform(T_subtract_pc_mean)
-        T_total_transform = T_subtract_pc_mean @ T_total_transform
 
     # Create dummy RGB values (white)
     rgb = np.ones((len(xyz), 3)) * 255
 
-    return xyz, rgb, obj, T_total_transform
+    # Return both the centering transform and the scene placement transform
+    return xyz, rgb, obj, T_subtract_pc_mean, T_scene_placement
 
 
 def load_scene_mesh(scene_mesh_file, scale=1.0):
@@ -344,7 +343,7 @@ if __name__ == "__main__":
     print(f"Processing mesh file: {args.mesh_file}")
     if args.filter_collisions and scene_mesh is not None:
         # Use scene-aware placement
-        pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data_with_scene_placement(
+        pc, pc_color, obj_mesh, T_subtract_pc_mean, T_scene_placement = load_mesh_data_with_scene_placement(
             args.mesh_file, scene_mesh, args.mesh_scale, args.num_sample_points
         )
     else:
@@ -352,6 +351,7 @@ if __name__ == "__main__":
         pc, pc_color, obj_mesh, T_subtract_pc_mean = load_mesh_data(
             args.mesh_file, args.mesh_scale, args.num_sample_points
         )
+        T_scene_placement = T_subtract_pc_mean  # For compatibility
 
     # Visualize meshes
     if not args.no_visualization:
@@ -379,25 +379,31 @@ if __name__ == "__main__":
             f"Inferred {len(grasps_inferred)} grasps, with scores ranging from {grasp_conf_inferred.min():.3f} - {grasp_conf_inferred.max():.3f}"
         )
 
-        # Convert grasps back to original mesh frame BEFORE collision checking
-        grasps_original_frame = np.array(
-            [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
-        )
-        
-        # Apply collision filtering if enabled  
-        if args.filter_collisions and scene_mesh is not None and gripper_mesh is not None:
-            # No need to transform scene_mesh since object is already placed relative to scene
-            valid_grasps, valid_conf, valid_mask = filter_collision_grasps(
-                grasps_original_frame, 
-                grasp_conf_inferred,
-                scene_mesh,  # Use original scene_mesh
-                gripper_mesh
-            )
+        # Convert grasps back to appropriate frame for collision checking and visualization
+        if args.filter_collisions and scene_mesh is not None:
+            # For scene-aware mode, convert to scene coordinates
+            T_to_scene = tra.inverse_matrix(T_subtract_pc_mean) @ T_scene_placement
+            grasps_scene_frame = np.array([T_to_scene @ g for g in grasps_inferred])
             
-            # Update data for visualization and saving
-            grasps_inferred = valid_grasps
-            grasp_conf_inferred = valid_conf
+            if gripper_mesh is not None:
+                # Apply collision filtering in scene coordinates
+                valid_grasps, valid_conf, valid_mask = filter_collision_grasps(
+                    grasps_scene_frame, 
+                    grasp_conf_inferred,
+                    scene_mesh,  # Use original scene_mesh
+                    gripper_mesh
+                )
+                
+                # Update data for visualization and saving
+                grasps_inferred = valid_grasps
+                grasp_conf_inferred = valid_conf
+            else:
+                grasps_inferred = grasps_scene_frame
         else:
+            # For original mode, convert back to original mesh frame
+            grasps_original_frame = np.array(
+                [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
+            )
             grasps_inferred = grasps_original_frame
 
         scores_inferred = get_color_from_score(grasp_conf_inferred, use_255_scale=True)
@@ -433,10 +439,15 @@ if __name__ == "__main__":
             
             # Calculate object pose for relative grasp conversion
             if obj_mesh is not None:
-                # Get object's current pose in world coordinates
-                # T_subtract_pc_mean contains all transformations applied to the object
-                object_pose = np.linalg.inv(T_subtract_pc_mean)
-                print(f"Object pose calculated from total transform")
+                # Get object's current pose in scene coordinates
+                if args.filter_collisions and scene_mesh is not None:
+                    # For scene-aware mode, object pose is scene placement transform
+                    object_pose = T_scene_placement
+                    print(f"Object pose calculated from scene placement transform")
+                else:
+                    # For original mode, use total transform
+                    object_pose = np.linalg.inv(T_subtract_pc_mean)
+                    print(f"Object pose calculated from total transform")
             else:
                 # Default identity if no object mesh
                 object_pose = np.eye(4)

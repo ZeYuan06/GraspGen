@@ -329,7 +329,7 @@ if __name__ == "__main__":
             
             # Visualize scene mesh
             if not args.no_visualization:
-                visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3)
+                visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.5)
         else:
             grasps_inferred = grasps_original_frame
 

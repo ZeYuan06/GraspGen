@@ -71,6 +71,7 @@ def visualize_mesh(
     mesh: trimesh.Trimesh,
     color: Optional[List[int]] = None,
     transform: Optional[np.ndarray] = None,
+    alpha: float = 1.0,
 ):
     """Visualize a mesh in meshcat"""
     if vis is None:
@@ -81,7 +82,7 @@ def visualize_mesh(
 
     mesh_vis = trimesh_to_meshcat_geometry(mesh)
     color_hex = rgb2hex(tuple(color))
-    material = meshcat.geometry.MeshPhongMaterial(color=color_hex)
+    material = meshcat.geometry.MeshPhongMaterial(color=color_hex, opacity=alpha)
     vis[name].set_object(mesh_vis, material)
 
     if transform is not None:

@@ -183,6 +183,10 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         obj = trimesh.load(mesh_file)
         obj.apply_scale(scale)
         
+        # First, sample points from the original mesh (before any placement)
+        xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
+        xyz = np.array(xyz)
+        
         # Record all transformations applied to the object
         T_total_transform = np.eye(4)
         
@@ -191,6 +195,8 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
             placement_transform = place_object_on_scene(obj, scene_mesh, placement_offset)
             if placement_transform is not None:
                 obj.apply_transform(placement_transform)
+                # Apply the same transform to the point cloud
+                xyz = tra.transform_points(xyz, placement_transform)
                 T_total_transform = placement_transform @ T_total_transform
                 print(f"Placed object on scene surface")
         
@@ -198,15 +204,17 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         obj_center = obj.bounds.mean(axis=0)
         T_subtract_xy_mean = tra.translation_matrix([-obj_center[0], -obj_center[1], 0])
         obj.apply_transform(T_subtract_xy_mean)
+        # Apply the same transform to the point cloud
+        xyz = tra.transform_points(xyz, T_subtract_xy_mean)
         T_total_transform = T_subtract_xy_mean @ T_total_transform
         
-        # Sample points from placed and centered object
-        xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
-        xyz = np.array(xyz)
-        
-        # Apply point cloud centering based on sampled points
-        T_subtract_pc_mean = tra.translation_matrix(-xyz.mean(axis=0))
+        # Apply final point cloud centering based on current point cloud position
+        pc_center = xyz.mean(axis=0)
+        T_subtract_pc_mean = tra.translation_matrix(-pc_center)
         xyz = tra.transform_points(xyz, T_subtract_pc_mean)
+        # Also apply to object mesh to keep them synchronized
+        if obj is not None:
+            obj.apply_transform(T_subtract_pc_mean)
         T_total_transform = T_subtract_pc_mean @ T_total_transform
 
     # Create dummy RGB values (white)

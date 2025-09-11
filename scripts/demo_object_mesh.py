@@ -355,11 +355,19 @@ if __name__ == "__main__":
 
     # Visualize meshes
     if not args.no_visualization:
+        obj_mesh_vis = obj_mesh.copy() if obj_mesh is not None else None
+        pc_vis = pc.copy()
+
+        T_to_scene = tra.inverse_matrix(T_subtract_pc_mean)
+        if obj_mesh_vis is not None:
+            obj_mesh_vis.apply_transform(T_to_scene)
+        pc_vis = tra.transform_points(pc_vis, T_to_scene)
+
         if obj_mesh is not None:
-            visualize_mesh(vis, "object_mesh", obj_mesh, color=[169, 169, 169])
+            visualize_mesh(vis, "object_mesh", obj_mesh_vis, color=[169, 169, 169])
         if scene_mesh is not None:
             visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3)
-        visualize_pointcloud(vis, "pc", pc, pc_color, size=0.0025)
+        visualize_pointcloud(vis, "pc", pc_vis, pc_color, size=0.0025)
 
     # Run inference on point cloud
     grasps_inferred, grasp_conf_inferred = GraspGenSampler.run_inference(
@@ -382,7 +390,7 @@ if __name__ == "__main__":
         # Convert grasps back to appropriate frame for collision checking and visualization
         if args.filter_collisions and scene_mesh is not None:
             # For scene-aware mode, convert to scene coordinates
-            T_to_scene = tra.inverse_matrix(T_subtract_pc_mean) @ T_scene_placement
+            T_to_scene = tra.inverse_matrix(T_subtract_pc_mean)
             grasps_scene_frame = np.array([T_to_scene @ g for g in grasps_inferred])
             
             if gripper_mesh is not None:

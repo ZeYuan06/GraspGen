@@ -251,7 +251,6 @@ def save_to_maniskill_format(
     grasps: np.ndarray, 
     confidences: np.ndarray, 
     output_path: str,
-    object_pose: np.ndarray = None
 ):
     """Saves grasps to NPZ format optimized for ManiSkill simulation libraries with relative poses.
     
@@ -275,25 +274,14 @@ def save_to_maniskill_format(
     sorted_grasps = grasps[sorted_indices]
     sorted_confidences = confidences[sorted_indices]
     
-    # Convert to relative poses if object pose is provided
-    if object_pose is not None:
-        # Convert world grasps to relative grasps
-        object_pose_inv = np.linalg.inv(object_pose)
-        relative_grasps = np.array([object_pose_inv @ grasp for grasp in sorted_grasps])
-        print(f"Converted {len(grasps)} grasps to relative poses")
-    else:
-        # Assume grasps are already relative to object
-        relative_grasps = sorted_grasps
-        print(f"Using grasps as relative poses")
-    
     # Extract relative positions and orientations
-    positions = relative_grasps[:, :3, 3]  # (N, 3) relative positions
-    rotation_matrices = relative_grasps[:, :3, :3]  # (N, 3, 3) relative rotations
+    positions = grasps[:, :3, 3]  # (N, 3) relative positions
+    rotation_matrices = grasps[:, :3, :3]  # (N, 3, 3) relative rotations
     
     # Convert rotation matrices to quaternions [w, x, y, z] format for ManiSkill
     quaternions = []
     euler_angles = []
-    for grasp in relative_grasps:
+    for grasp in grasps:
         quaternions.append(tra.quaternion_from_matrix(grasp))  # [w,x,y,z] format
         euler_angles.append(tra.euler_from_matrix(grasp, 'rxyz'))
     
@@ -303,7 +291,7 @@ def save_to_maniskill_format(
     # Save comprehensive data for ManiSkill
     save_data = {
         # Core grasp data (relative to object)
-        'relative_poses': relative_grasps.astype(np.float32),          # (N, 4, 4) relative to object
+        'relative_poses': grasps.astype(np.float32),          # (N, 4, 4) relative to object
         'relative_positions': positions.astype(np.float32),            # (N, 3) relative positions
         'relative_quaternions': quaternions,                           # (N, 4) relative orientations [w,x,y,z]
         'relative_euler_angles': euler_angles,                         # (N, 3) relative euler angles
@@ -316,7 +304,6 @@ def save_to_maniskill_format(
         'sorted_indices': sorted_indices.astype(np.int32),
         
         # Object reference (if provided)
-        'object_pose': object_pose.astype(np.float32) if object_pose is not None else np.eye(4, dtype=np.float32),
         'is_relative': True,  # Flag indicating poses are relative to object
     }
     

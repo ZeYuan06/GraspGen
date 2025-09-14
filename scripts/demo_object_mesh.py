@@ -182,7 +182,7 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
         T_subtract_pc_mean = np.eye(4)
     else:
         obj = trimesh.load(mesh_file)
-        obj.apply_scale(scale)
+        obj.apply_scale(scale)  # with extent 0.1, 0.1, 0.1
         
         # First, sample points from the original mesh (before any placement)
         xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
@@ -291,13 +291,11 @@ def filter_collision_grasps(grasps, grasp_conf, scene_mesh, gripper_mesh):
     
     # Filter out colliding grasps
     valid_mask = ~collisions  # Invert to keep non-colliding grasps
-    valid_grasps = grasps[valid_mask]
-    valid_conf = grasp_conf[valid_mask]
     
     print(f"Filtered {np.sum(collisions)} colliding grasps out of {len(grasps)}")
-    print(f"Remaining valid grasps: {len(valid_grasps)}")
+    print(f"Remaining valid grasps: {valid_mask.sum()}")
     
-    return valid_grasps, valid_conf, valid_mask
+    return valid_mask
 
 
 if __name__ == "__main__":
@@ -395,7 +393,7 @@ if __name__ == "__main__":
             
             if gripper_mesh is not None:
                 # Apply collision filtering in scene coordinates
-                valid_grasps, valid_conf, valid_mask = filter_collision_grasps(
+                valid_mask = filter_collision_grasps(
                     grasps_scene_frame, 
                     grasp_conf_inferred,
                     scene_mesh,  # Use original scene_mesh
@@ -403,8 +401,9 @@ if __name__ == "__main__":
                 )
                 
                 # Update data for visualization and saving
-                grasps_inferred = valid_grasps
-                grasp_conf_inferred = valid_conf
+                grasps_inferred = grasps_inferred[valid_mask]
+                grasp_conf_inferred = grasp_conf_inferred[valid_mask]
+                grasps_inferred_scene = grasps_scene_frame[valid_mask]
             else:
                 grasps_inferred = grasps_scene_frame
         else:
@@ -421,7 +420,7 @@ if __name__ == "__main__":
 
         # Visualize inferred grasps
         if not args.no_visualization:
-            for j, grasp in enumerate(grasps_inferred):
+            for j, grasp in enumerate(grasps_inferred_scene):
                 visualize_grasp(
                     vis,
                     f"grasps_objectpc_filtered/{j:03d}/grasp",
@@ -462,7 +461,7 @@ if __name__ == "__main__":
                 print(f"Using identity object pose")
             
             save_to_maniskill_format(
-                grasps_inferred, grasp_conf_inferred, maniskill_output_path, object_pose
+                grasps_inferred, grasp_conf_inferred, maniskill_output_path
             )
         else:
             print("No output file specified, skipping grasp saving")

@@ -290,12 +290,11 @@ def save_to_maniskill_format(
     positions = relative_grasps[:, :3, 3]  # (N, 3) relative positions
     rotation_matrices = relative_grasps[:, :3, :3]  # (N, 3, 3) relative rotations
     
-    # Convert rotation matrices to quaternions [x, y, z, w] format for ManiSkill
+    # Convert rotation matrices to quaternions [w, x, y, z] format for ManiSkill
     quaternions = []
     euler_angles = []
     for grasp in relative_grasps:
-        q = tra.quaternion_from_matrix(grasp)
-        quaternions.append([q[1], q[2], q[3], q[0]])  # [x,y,z,w] format
+        quaternions.append(tra.quaternion_from_matrix(grasp))  # [w,x,y,z] format
         euler_angles.append(tra.euler_from_matrix(grasp, 'rxyz'))
     
     quaternions = np.array(quaternions, dtype=np.float32)
@@ -306,7 +305,7 @@ def save_to_maniskill_format(
         # Core grasp data (relative to object)
         'relative_poses': relative_grasps.astype(np.float32),          # (N, 4, 4) relative to object
         'relative_positions': positions.astype(np.float32),            # (N, 3) relative positions
-        'relative_quaternions': quaternions,                           # (N, 4) relative orientations [x,y,z,w]
+        'relative_quaternions': quaternions,                           # (N, 4) relative orientations [w,x,y,z]
         'relative_euler_angles': euler_angles,                         # (N, 3) relative euler angles
         'confidences': sorted_confidences.astype(np.float32),          # (N,) confidence scores
         

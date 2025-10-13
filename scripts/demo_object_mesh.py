@@ -329,8 +329,8 @@ if __name__ == "__main__":
     if args.filter_collisions:
         if args.scene_mesh_file == "":
             raise ValueError("scene_mesh_file is required when filter_collisions is True")
-        
-        scene_mesh = load_scene_mesh(args.scene_mesh_file, args.mesh_scale)
+
+        scene_mesh = load_scene_mesh(args.scene_mesh_file)
         gripper_mesh = load_gripper_mesh(args.gripper_mesh_file, gripper_name)
         
         if gripper_mesh is None:

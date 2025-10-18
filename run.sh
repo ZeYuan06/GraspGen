@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Activate the Conda environment
-source /home/zy3722/miniconda3/etc/profile.d/conda.sh
+source "$(dirname "$(dirname "$CONDA_EXE")")/etc/profile.d/conda.sh"
 conda activate graspgen
 
 # Define variables

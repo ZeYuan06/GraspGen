@@ -92,6 +92,5 @@ data/*
 
 
 pointnet2_ops/build/
-scene_mesh/
 
 debug.py

@@ -272,10 +272,11 @@ def load_gripper_mesh(gripper_mesh_file, gripper_name):
         print(f"Loaded custom gripper mesh: {gripper_mesh_file}")
     else:
         # Use default gripper mesh paths
+        ASSET_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
         default_gripper_paths = {
-            "robotiq_2f_140": "assets/robotiq/robotiq_140_collision.obj",
-            "franka_panda": "assets/franka/franka_panda.urdf",
-            "suction": "assets/suction/suction_cup.obj",
+            "robotiq_2f_140": os.path.join(ASSET_DIR, "robotiq", "robotiq_140_collision.obj"),
+            "franka_panda": os.path.join(ASSET_DIR, "franka", "franka_panda.urdf"),
+            "suction": os.path.join(ASSET_DIR, "suction", "suction_cup.obj"),
         }
 
         if gripper_name in default_gripper_paths:

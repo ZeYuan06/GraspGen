@@ -26,7 +26,11 @@ from grasp_gen.utils.meshcat_utils import (
 )
 from grasp_gen.utils.point_cloud_utils import point_cloud_outlier_removal
 from grasp_gen.dataset.dataset_utils import sample_points
-from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format, save_to_maniskill_format, check_collision
+from grasp_gen.dataset.eval_utils import (
+    save_to_isaac_grasp_format,
+    save_to_maniskill_format,
+    check_collision,
+)
 
 
 def parse_args():
@@ -98,7 +102,7 @@ def parse_args():
         help="Path to the scene mesh file for collision checking (obj, stl, ply, glb, or gltf)",
     )
     parser.add_argument(
-        "--gripper_mesh_file", 
+        "--gripper_mesh_file",
         type=str,
         default="",
         help="Path to the gripper mesh file for collision checking (obj, stl, or ply)",
@@ -116,28 +120,28 @@ def place_object_on_scene(obj_mesh, scene_mesh, placement_height_offset=0.01):
     """Place object on top of the scene (e.g., on table surface)."""
     if obj_mesh is None or scene_mesh is None:
         return None
-    
+
     # Get scene bounds
     scene_bounds = scene_mesh.bounds
     scene_min_z = scene_bounds[0][2]  # Bottom Z
     scene_max_z = scene_bounds[1][2]  # Top Z (table surface)
-    
+
     # Get object bounds
     obj_bounds = obj_mesh.bounds
     obj_min_z = obj_bounds[0][2]
     obj_height = obj_bounds[1][2] - obj_bounds[0][2]
-    
+
     # Calculate placement position
     # Place object on table surface with small offset
     target_z = scene_max_z + placement_height_offset
-    
+
     # Move object so its bottom sits on the table
     z_offset = target_z - obj_min_z
     placement_transform = tra.translation_matrix([0, 0, z_offset])
-    
+
     print(f"Scene Z range: {scene_min_z:.3f} to {scene_max_z:.3f}")
     print(f"Object height: {obj_height:.3f}, placing at Z: {target_z:.3f}")
-    
+
     return placement_transform
 
 
@@ -169,10 +173,13 @@ def load_mesh_data(mesh_file, scale, num_sample_points):
     return xyz, rgb, obj, T_subtract_pc_mean
 
 
-def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample_points, placement_offset=0.01):
+def load_mesh_data_with_scene_placement(
+    mesh_file, scene_mesh, scale, num_sample_points, placement_offset=0.01
+):
     """Load mesh data and place it appropriately relative to scene."""
     if mesh_file.endswith("ply"):
         import open3d as o3d
+
         pcd = o3d.io.read_point_cloud(mesh_file)
         xyz = np.array(pcd.points).astype(np.float32)
         pt_idx = sample_points(xyz, num_sample_points)
@@ -183,30 +190,32 @@ def load_mesh_data_with_scene_placement(mesh_file, scene_mesh, scale, num_sample
     else:
         obj = trimesh.load(mesh_file)
         obj.apply_scale(scale)  # with extent 0.1, 0.1, 0.1
-        
+
         # First, sample points from the original mesh (before any placement)
         xyz, _ = trimesh.sample.sample_surface(obj, num_sample_points)
         xyz = np.array(xyz)
-        
+
         # Record transformations separately
         T_scene_placement = np.eye(4)  # Transform to place on scene
-        
+
         # Place object on scene if scene is provided
         if scene_mesh is not None:
-            placement_transform = place_object_on_scene(obj, scene_mesh, placement_offset)
+            placement_transform = place_object_on_scene(
+                obj, scene_mesh, placement_offset
+            )
             if placement_transform is not None:
                 obj.apply_transform(placement_transform)
                 xyz = tra.transform_points(xyz, placement_transform)
                 T_scene_placement = placement_transform @ T_scene_placement
                 print(f"Placed object on scene surface")
-        
+
         # Center object in XY but keep Z placement
         obj_center = obj.bounds.mean(axis=0)
         T_subtract_xy_mean = tra.translation_matrix([-obj_center[0], -obj_center[1], 0])
         obj.apply_transform(T_subtract_xy_mean)
         xyz = tra.transform_points(xyz, T_subtract_xy_mean)
         T_scene_placement = T_subtract_xy_mean @ T_scene_placement
-        
+
         # Apply final point cloud centering for inference (this is temporary)
         pc_center = xyz.mean(axis=0)
         T_subtract_pc_mean = tra.translation_matrix(-pc_center)
@@ -226,29 +235,31 @@ def load_scene_mesh(scene_mesh_file, scale=1.0):
     """Load scene mesh for collision checking, supports GLB files."""
     if not os.path.exists(scene_mesh_file):
         raise FileNotFoundError(f"Scene mesh file {scene_mesh_file} not found")
-    
+
     try:
         # Load the mesh/scene file
         loaded_object = trimesh.load(scene_mesh_file)
-        
+
         # Handle different types of loaded objects
         if isinstance(loaded_object, trimesh.Scene):
             print(f"Loaded GLB scene with {len(loaded_object.geometry)} geometries")
             scene_mesh = loaded_object.dump(concatenate=True)
-            print(f"Successfully dumped scene mesh with {len(scene_mesh.vertices)} vertices")
-                
+            print(
+                f"Successfully dumped scene mesh with {len(scene_mesh.vertices)} vertices"
+            )
+
         elif isinstance(loaded_object, trimesh.Trimesh):
             # Single mesh file
             scene_mesh = loaded_object
             print(f"Loaded single mesh with {len(scene_mesh.vertices)} vertices")
         else:
             raise ValueError(f"Unsupported mesh type: {type(loaded_object)}")
-        
+
         # Apply scaling
         scene_mesh.apply_scale(scale)
-        
+
         return scene_mesh
-        
+
     except Exception as e:
         print(f"Error loading scene mesh: {e}")
         raise
@@ -264,12 +275,14 @@ def load_gripper_mesh(gripper_mesh_file, gripper_name):
         default_gripper_paths = {
             "robotiq_2f_140": "assets/robotiq/robotiq_140_collision.obj",
             "franka_panda": "assets/franka/franka_panda.urdf",
-            "suction": "assets/suction/suction_cup.obj"
+            "suction": "assets/suction/suction_cup.obj",
         }
-        
+
         if gripper_name in default_gripper_paths:
             gripper_path = default_gripper_paths[gripper_name]
-            if os.path.exists(gripper_path) and gripper_path.endswith(('.obj', '.stl', '.ply')):
+            if os.path.exists(gripper_path) and gripper_path.endswith(
+                (".obj", ".stl", ".ply")
+            ):
                 gripper_mesh = trimesh.load(gripper_path)
                 print(f"Loaded default gripper mesh for {gripper_name}")
             else:
@@ -278,23 +291,23 @@ def load_gripper_mesh(gripper_mesh_file, gripper_name):
         else:
             print(f"Warning: No gripper mesh available for {gripper_name}")
             gripper_mesh = None
-    
+
     return gripper_mesh
 
 
 def filter_collision_grasps(grasps, grasp_conf, scene_mesh, gripper_mesh):
     """Filter out grasps that collide with the scene."""
     print("Checking for collisions...")
-    
+
     # Check collisions using the existing check_collision function
     collisions = check_collision(scene_mesh, gripper_mesh, grasps)
-    
+
     # Filter out colliding grasps
     valid_mask = ~collisions  # Invert to keep non-colliding grasps
-    
+
     print(f"Filtered {np.sum(collisions)} colliding grasps out of {len(grasps)}")
     print(f"Remaining valid grasps: {valid_mask.sum()}")
-    
+
     return valid_mask
 
 
@@ -328,11 +341,13 @@ if __name__ == "__main__":
     gripper_mesh = None
     if args.filter_collisions:
         if args.scene_mesh_file == "":
-            raise ValueError("scene_mesh_file is required when filter_collisions is True")
+            raise ValueError(
+                "scene_mesh_file is required when filter_collisions is True"
+            )
 
         scene_mesh = load_scene_mesh(args.scene_mesh_file)
         gripper_mesh = load_gripper_mesh(args.gripper_mesh_file, gripper_name)
-        
+
         if gripper_mesh is None:
             print("Warning: No gripper mesh available, collision filtering disabled")
             args.filter_collisions = False
@@ -341,8 +356,10 @@ if __name__ == "__main__":
     print(f"Processing mesh file: {args.mesh_file}")
     if args.filter_collisions and scene_mesh is not None:
         # Use scene-aware placement
-        pc, pc_color, obj_mesh, T_subtract_pc_mean, T_scene_placement = load_mesh_data_with_scene_placement(
-            args.mesh_file, scene_mesh, args.mesh_scale, args.num_sample_points
+        pc, pc_color, obj_mesh, T_subtract_pc_mean, T_scene_placement = (
+            load_mesh_data_with_scene_placement(
+                args.mesh_file, scene_mesh, args.mesh_scale, args.num_sample_points
+            )
         )
     else:
         # Use original centering method
@@ -364,7 +381,9 @@ if __name__ == "__main__":
         if obj_mesh is not None:
             visualize_mesh(vis, "object_mesh", obj_mesh_vis, color=[169, 169, 169])
         if scene_mesh is not None:
-            visualize_mesh(vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3)
+            visualize_mesh(
+                vis, "scene_mesh", scene_mesh, color=[200, 200, 200], alpha=0.3
+            )
         visualize_pointcloud(vis, "pc", pc_vis, pc_color, size=0.0025)
 
     # Run inference on point cloud
@@ -380,7 +399,7 @@ if __name__ == "__main__":
     if len(grasps_inferred) > 0:
         grasp_conf_inferred = grasp_conf_inferred.cpu().numpy()
         grasps_inferred = grasps_inferred.cpu().numpy()
-        
+
         print(
             f"Inferred {len(grasps_inferred)} grasps, with scores ranging from {grasp_conf_inferred.min():.3f} - {grasp_conf_inferred.max():.3f}"
         )
@@ -390,16 +409,16 @@ if __name__ == "__main__":
             # For scene-aware mode, convert to scene coordinates
             T_to_scene = tra.inverse_matrix(T_subtract_pc_mean)
             grasps_scene_frame = np.array([T_to_scene @ g for g in grasps_inferred])
-            
+
             if gripper_mesh is not None:
                 # Apply collision filtering in scene coordinates
                 valid_mask = filter_collision_grasps(
-                    grasps_scene_frame, 
+                    grasps_scene_frame,
                     grasp_conf_inferred,
                     scene_mesh,  # Use original scene_mesh
-                    gripper_mesh
+                    gripper_mesh,
                 )
-                
+
                 # Update data for visualization and saving
                 grasps_inferred = grasps_inferred[valid_mask]
                 grasp_conf_inferred = grasp_conf_inferred[valid_mask]
@@ -433,23 +452,42 @@ if __name__ == "__main__":
         # Save grasps to file only if output_file is not empty
         if args.output_file != "":
             print(f"Saving predicted grasps to {args.output_file}")
-            
+
+            T_base_eef = np.eye(4)
+            T_base_eef[2, 3] = 0.15
+            grasps_to_save = np.array([g @ T_base_eef for g in grasps_inferred])
+            print("Applied transform from Gripper Base to EEF (Z+0.15m) for saving.")
+
             # Save in Isaac format (YAML) - absolute poses for Isaac compatibility
             save_to_isaac_grasp_format(
-                grasps_inferred, grasp_conf_inferred, args.output_file
+                grasps_to_save, grasp_conf_inferred, args.output_file
             )
-            
+
             # Save in ManiSkill format (NPZ) - relative poses for simulation flexibility
-            maniskill_output_path = args.output_file.replace('.yml', '.npz').replace('.yaml', '.npz')
-            if not maniskill_output_path.endswith('.npz'):
-                maniskill_output_path += '.npz'
-            
+            maniskill_output_path = args.output_file.replace(".yml", ".npz").replace(
+                ".yaml", ".npz"
+            )
+            if not maniskill_output_path.endswith(".npz"):
+                maniskill_output_path += ".npz"
+
             # Calculate object pose for relative grasp conversion
             if obj_mesh is not None:
                 # Get object's current pose in scene coordinates
                 if args.filter_collisions and scene_mesh is not None:
                     # For scene-aware mode, object pose is scene placement transform
-                    object_pose = T_scene_placement
+                    # object_pose = T_scene_placement
+
+                    # Get geometric center in local frame
+                    obj_center_local = obj_mesh.bounds.mean(axis=0)
+
+                    # Transform the center to scene frame using the placement transform
+                    # T_scene_placement maps from Local -> Scene
+                    obj_center_scene = tra.transform_points(
+                        [obj_center_local], T_scene_placement
+                    )[0]
+
+                    object_pose = np.eye(4)
+                    object_pose[:3, 3] = obj_center_scene
                     print(f"Object pose calculated from scene placement transform")
                 else:
                     # For original mode, use total transform
@@ -459,9 +497,9 @@ if __name__ == "__main__":
                 # Default identity if no object mesh
                 object_pose = np.eye(4)
                 print(f"Using identity object pose")
-            
+
             save_to_maniskill_format(
-                grasps_inferred, grasp_conf_inferred, maniskill_output_path
+                grasps_to_save, grasp_conf_inferred, maniskill_output_path
             )
         else:
             print("No output file specified, skipping grasp saving")
